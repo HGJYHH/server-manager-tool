@@ -1,0 +1,2 @@
+终端执行脚本获取项目目录以及内容
+python generate_ai_context.py

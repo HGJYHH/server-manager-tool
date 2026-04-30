@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>服务器管理工具</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: inline-block; width: 80px; }
+        input { width: 250px; padding: 8px; }
+        button { padding: 8px 20px; margin-right: 10px; cursor: pointer; }
+        .message { margin-top: 20px; padding: 10px; border-radius: 4px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+</head>
+<body>
+<h2>服务器管理工具</h2>
+<form id="credForm">
+    <div class="form-group">
+        <label>IP地址：</label>
+        <input type="text" id="ip" th:value="${credential != null ? credential.ip : ''}">
+    </div>
+    <div class="form-group">
+        <label>用户名：</label>
+        <input type="text" id="username" th:value="${credential != null ? credential.username : ''}">
+    </div>
+    <div class="form-group">
+        <label>密码：</label>
+        <input type="password" id="password" th:value="${credential != null ? credential.password : ''}">
+    </div>
+    <div>
+        <button type="button" id="saveBtn">保存修改</button>
+        <button type="button" id="connectBtn">连接服务器</button>
+    </div>
+</form>
+<div id="message" class="message" style="display:none;"></div>
+
+<script>
+    const saveBtn = document.getElementById('saveBtn');
+    const connectBtn = document.getElementById('connectBtn');
+    const messageDiv = document.getElementById('message');
+
+    function showMessage(text, isError) {
+        messageDiv.textContent = text;
+        messageDiv.className = 'message ' + (isError ? 'error' : 'success');
+        messageDiv.style.display = 'block';
+        setTimeout(() => {
+            messageDiv.style.display = 'none';
+        }, 5000);
+    }
+
+    // 保存修改（覆盖凭证）
+    saveBtn.addEventListener('click', () => {
+        const ip = document.getElementById('ip').value.trim();
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        if (!ip || !username || !password) {
+            showMessage('请填写完整信息', true);
+            return;
+        }
+        fetch('/api/credentials', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip, username, password })
+        })
+            .then(res => res.json())
+            .then(data => {
+                showMessage(data.message, false);
+            })
+            .catch(err => showMessage('保存失败: ' + err.message, true));
+    });
+
+    // 连接服务器（使用当前显示的凭证，因为已经保存过，服务端会使用最新保存的凭证）
+    connectBtn.addEventListener('click', () => {
+        // 先保存当前输入（确保服务端凭证是最新）
+        const ip = document.getElementById('ip').value.trim();
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        if (!ip || !username || !password) {
+            showMessage('请填写完整信息', true);
+            return;
+        }
+        // 先调用保存接口，再连接
+        fetch('/api/credentials', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip, username, password })
+        })
+            .then(() => {
+                // 然后测试连接
+                return fetch('/api/connect', { method: 'POST' });
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(`连接成功！服务器：${data.server}`, false);
+                } else {
+                    showMessage(`连接失败：${data.message}`, true);
+                }
+            })
+            .catch(err => showMessage('连接异常: ' + err.message, true));
+    });
+</script>
+</body>
+</html>
