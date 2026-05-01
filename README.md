@@ -98,5 +98,3 @@ java -jar target/server-manager-tool.jar
 **Enjoy managing your servers with ease!**  
 如有问题或建议，欢迎提交 Issue 或 Pull Request。
 ```
-
-保存后，你可以用 `git add README.md` 把它一起提交到 GitHub，这样仓库主页就会显示一个漂亮的项目介绍了。
