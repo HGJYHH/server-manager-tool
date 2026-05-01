@@ -1939,7 +1939,18 @@ public class WebViewBackend {
     private final TerminalSession session;
     private final WebView webView;
     private JSObject jsWindow;
+    // 在 WebViewBackend 类中添加
+    private Runnable onExitCallback;
 
+    public void setOnExitCallback(Runnable callback) {
+        this.onExitCallback = callback;
+    }
+
+    public void exitToTerminal() {
+        if (onExitCallback != null) {
+            Platform.runLater(onExitCallback);
+        }
+    }
     public WebViewBackend(TerminalSession session, WebView webView) {
         this.session = session;
         this.webView = webView;
@@ -2066,9 +2077,46 @@ public class WebViewBackend {
         });
     }
 
+    public String readFileContent(String remotePath) {
+        System.out.println(55656);
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            session.downloadFile(remotePath, baos);
+            byte[] bytes = baos.toByteArray();
+
+            // 简单文本检测（连续空字节或异常控制字符视为二进制）
+            boolean isText = true;
+            int nullCount = 0;
+            for (int i = 0; i < Math.min(bytes.length, 2048); i++) {
+                byte b = bytes[i];
+                if (b == 0) {
+                    nullCount++;
+                    if (nullCount > 10) {
+                        isText = false;
+                        break;
+                    }
+                } else if (b < 32 && b != 9 && b != 10 && b != 13 && b != 12) {
+                    isText = false;
+                    break;
+                }
+            }
+
+            if (!isText) {
+                return "ERROR:二进制文件，无法预览";
+            }
+
+            String content = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            // 直接返回内容，不封装JSON，避免转义问题
+            return "SUCCESS:" + content;
+        } catch (Exception e) {
+            return "ERROR:" + e.getMessage();
+        }
+    }
+
+    // 复用已有的 escapeJson 方法
     private String escapeJson(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
     private String escapeJsString(String s) {
@@ -2132,6 +2180,7 @@ public class WebViewFileBrowser extends BorderPane {
                 try {
                     // 3. 创建后端桥接
                     backend = new WebViewBackend(session, webView);
+                    backend.setOnExitCallback(onExit);
                     JSObject window = (JSObject) webView.getEngine().executeScript("window");
                     window.setMember("javaBackend", backend);
                     backend.setJsWindow(window);
@@ -2364,634 +2413,172 @@ spring.application.name=server-manager-tool
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Linux 可视化桌面 - 仿 Windows 风格（真实 SSH 后端）</title>
-    <!-- Font Awesome 6 (免费图标库) -->
+    <title>Linux 可视化桌面 - 仿 Windows 风格</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            user-select: none; /* 避免拖动时选中文本/图标文字，但输入框不禁用 */
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body { width: 100vw; height: 100vh; overflow: hidden; font-family: 'Segoe UI', 'Ubuntu', sans-serif; }
+        .desktop { position: relative; width: 100%; height: 100%; background: radial-gradient(circle at 20% 30%, #1a2a3a, #0b1219); overflow: hidden; }
+        .desktop-icons { position: absolute; top: 20px; left: 20px; display: flex; flex-direction: column; gap: 24px; z-index: 10; }
+        .desktop-icon { display: flex; flex-direction: column; align-items: center; width: 85px; cursor: pointer; padding: 8px 4px; border-radius: 8px; transition: background 0.2s; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+        .desktop-icon:hover { background: rgba(255,255,255,0.15); backdrop-filter: blur(4px); }
+        .desktop-icon i { font-size: 40px; margin-bottom: 6px; }
+        .desktop-icon span { font-size: 13px; text-align: center; font-weight: 500; }
+        .taskbar { position: fixed; bottom: 0; left: 0; width: 100%; height: 48px; background: rgba(20,25,35,0.85); backdrop-filter: blur(20px); border-top: 1px solid rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: space-between; padding: 0 12px; z-index: 1000; color: white; font-size: 14px; }
+        .start-area { display: flex; align-items: center; gap: 8px; }
+        .start-btn { background: rgba(255,255,255,0.15); border-radius: 8px; padding: 6px 16px; display: flex; align-items: center; gap: 8px; cursor: pointer; transition: all 0.2s; font-weight: 500; }
+        .start-btn:hover { background: rgba(255,255,255,0.25); }
+        .taskbar-tray { display: flex; align-items: center; gap: 16px; background: rgba(0,0,0,0.3); padding: 4px 12px; border-radius: 20px; }
+        .clock { font-family: monospace; font-weight: 500; }
+        .start-menu { position: fixed; bottom: 52px; left: 12px; width: 280px; background: rgba(28,32,44,0.92); backdrop-filter: blur(30px); border-radius: 16px; border: 1px solid rgba(255,255,255,0.2); box-shadow: 0 10px 25px rgba(0,0,0,0.3); z-index: 1100; overflow: hidden; color: white; }
+        .start-header { padding: 20px 20px 12px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; gap: 12px; }
+        .start-header i { font-size: 38px; color: #f0b37b; }
+        .start-apps { padding: 12px 8px; display: flex; flex-direction: column; gap: 8px; }
+        .start-app-item { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+        .start-app-item:hover { background: rgba(255,255,255,0.15); }
+        .hidden { display: none; }
 
-        body {
-            width: 100vw;
-            height: 100vh;
-            overflow: hidden;
-            font-family: 'Segoe UI', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Helvetica Neue', sans-serif;
-        }
+        .window { position: absolute; min-width: 480px; min-height: 360px; background: rgba(30,34,48,0.95); backdrop-filter: blur(12px); border-radius: 12px; border: 1px solid rgba(255,255,255,0.3); box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; overflow: hidden; z-index: 500; color: #eee; }
+        .window.active { z-index: 999; border-color: rgba(100,150,255,0.6); }
+        .window-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: rgba(0,0,0,0.3); cursor: grab; border-bottom: 1px solid rgba(255,255,255,0.1); font-weight: 500; }
+        .window-header:active { cursor: grabbing; }
+        .window-controls { display: flex; gap: 12px; }
+        .window-controls i { cursor: pointer; opacity: 0.7; }
+        .window-controls i:hover { opacity: 1; color: #ff9f4a; }
+        .window-content { flex: 1; padding: 16px; overflow-y: auto; background: rgba(20,24,36,0.7); font-size: 14px; }
 
-        /* 桌面背景 (Linux 风格深色极光) */
-        .desktop {
-            position: relative;
-            width: 100%;
-            height: 100%;
-            background: radial-gradient(circle at 20% 30%, #1a2a3a, #0b1219);
-            background-size: cover;
-            overflow: hidden;
-        }
+        .file-toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+        .file-toolbar button { background: rgba(255,255,255,0.1); border: none; color: #eee; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; transition: 0.1s; }
+        .file-toolbar button:hover { background: rgba(255,255,255,0.25); }
+        .file-list { list-style: none; margin: 0; padding: 0; }
+        .file-list li { padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: space-between; }
+        .file-list li:hover { background: rgba(255,255,255,0.1); }
+        .file-list li .file-name { display: flex; align-items: center; gap: 12px; flex: 1; }
+        .file-actions button { background: transparent; border: none; color: #ccc; cursor: pointer; margin-left: 8px; }
+        .file-actions button:hover { color: white; }
 
-        /* 桌面图标网格 */
-        .desktop-icons {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 24px;
-            z-index: 10;
-        }
-
-        .desktop-icon {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            width: 85px;
-            cursor: pointer;
-            padding: 8px 4px;
-            border-radius: 8px;
-            transition: background 0.2s;
-            color: white;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
-        }
-
-        .desktop-icon:hover {
-            background: rgba(255,255,255,0.15);
-            backdrop-filter: blur(4px);
-        }
-
-        .desktop-icon i {
-            font-size: 40px;
-            margin-bottom: 6px;
-            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
-        }
-
-        .desktop-icon span {
-            font-size: 13px;
-            text-align: center;
-            font-weight: 500;
-        }
-
-        /* 任务栏 (仿 Windows 11 毛玻璃) */
-        .taskbar {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            height: 48px;
-            background: rgba(20, 25, 35, 0.85);
-            backdrop-filter: blur(20px);
-            border-top: 1px solid rgba(255,255,255,0.2);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 12px;
-            z-index: 1000;
-            color: white;
-            font-size: 14px;
-        }
-
-        .start-area {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .start-btn {
-            background: rgba(255,255,255,0.15);
-            border-radius: 8px;
-            padding: 6px 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-weight: 500;
-        }
-
-        .start-btn:hover {
-            background: rgba(255,255,255,0.25);
-        }
-
-        .start-btn i {
-            font-size: 18px;
-        }
-
-        .taskbar-apps {
-            flex: 1;
-            display: flex;
-            justify-content: center;
-            gap: 6px;
-        }
-
-        .taskbar-tray {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            background: rgba(0,0,0,0.3);
-            padding: 4px 12px;
-            border-radius: 20px;
-        }
-
-        .taskbar-tray i {
-            font-size: 16px;
-        }
-
-        .clock {
-            font-family: monospace;
-            font-weight: 500;
-        }
-
-        /* 开始菜单 (仿 Win11) */
-        .start-menu {
-            position: fixed;
-            bottom: 52px;
-            left: 12px;
-            width: 360px;
-            background: rgba(28, 32, 44, 0.92);
-            backdrop-filter: blur(30px);
-            border-radius: 16px;
-            border: 1px solid rgba(255,255,255,0.2);
-            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-            z-index: 1100;
-            overflow: hidden;
-            transition: 0.2s ease;
-            transform-origin: bottom left;
-            color: white;
-        }
-
-        .start-header {
-            padding: 20px 20px 12px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .start-header i {
-            font-size: 38px;
-            color: #f0b37b;
-        }
-
-        .start-header span {
-            font-size: 18px;
-            font-weight: 500;
-        }
-
-        .start-apps {
-            padding: 12px 8px;
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
-        }
-
-        .start-app-item {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .start-app-item:hover {
-            background: rgba(255,255,255,0.15);
-        }
-
-        .start-app-item i {
-            width: 28px;
-            font-size: 20px;
-            text-align: center;
-        }
-
-        /* 窗口样式 (可拖拽，圆角玻璃) */
-        .window {
-            position: absolute;
-            min-width: 480px;
-            min-height: 360px;
-            background: rgba(30, 34, 48, 0.95);
-            backdrop-filter: blur(12px);
-            border-radius: 12px;
-            border: 1px solid rgba(255,255,255,0.3);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            z-index: 500;
-            transition: box-shadow 0.1s;
-            resize: both;
-            color: #eee;
-        }
-
-        .window.active {
-            z-index: 999;
-            border-color: rgba(100, 150, 255, 0.6);
-            box-shadow: 0 12px 35px rgba(0,0,0,0.6);
-        }
-
-        .window-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 10px 16px;
-            background: rgba(0,0,0,0.3);
-            cursor: grab;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            font-weight: 500;
-        }
-
-        .window-header:active {
-            cursor: grabbing;
-        }
-
-        .window-title {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .window-controls {
-            display: flex;
-            gap: 12px;
-        }
-
-        .window-controls i {
-            cursor: pointer;
-            font-size: 14px;
-            opacity: 0.7;
-            transition: 0.1s;
-        }
-
-        .window-controls i:hover {
-            opacity: 1;
-            color: #ff9f4a;
-        }
-
-        .window-content {
-            flex: 1;
-            padding: 16px;
-            overflow-y: auto;
-            background: rgba(20, 24, 36, 0.7);
-            font-size: 14px;
-        }
-
-        /* 终端样式 */
-        .terminal-body {
-            background: #0c0f18;
-            font-family: 'Courier New', monospace;
-            padding: 12px;
-            border-radius: 8px;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .terminal-output {
-            flex: 1;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            margin-bottom: 8px;
-            color: #0f0;
-            font-size: 13px;
-        }
-
-        .terminal-input-line {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            background: #00000055;
-            padding: 6px;
-            border-radius: 6px;
-        }
-
-        .terminal-prompt {
-            color: #0f0;
-            font-weight: bold;
-        }
-
-        .terminal-input {
-            background: transparent;
-            border: none;
-            color: #0f0;
-            outline: none;
-            flex: 1;
-            font-family: monospace;
-            font-size: 13px;
-        }
-
-        /* 文件管理器样式 */
-        .file-list {
-            list-style: none;
-        }
-        .file-list li {
-            padding: 8px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            cursor: pointer;
-        }
-        .file-list li:hover {
-            background: rgba(255,255,255,0.1);
-        }
-        .file-list li .file-name {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex: 1;
-        }
-        .file-actions button {
-            background: transparent;
-            border: none;
-            color: #ccc;
-            cursor: pointer;
-            margin-left: 8px;
-        }
-        .file-actions button:hover {
-            color: white;
-        }
-
-        /* 滚动条美化 */
-        ::-webkit-scrollbar {
-            width: 6px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #1e1e2e;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 4px;
-        }
-
-        /* 隐藏开始菜单 */
-        .hidden {
-            display: none;
-        }
-
-        /* 等待提示 */
-        .waiting-message {
-            text-align: center;
-            padding: 40px;
-            color: #aaa;
-        }
+        .context-menu { position: fixed; background: #2d2f3a; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); z-index: 2000; min-width: 160px; overflow: hidden; }
+        .context-menu-item { padding: 8px 16px; cursor: pointer; color: #eee; font-size: 13px; transition: 0.1s; }
+        .context-menu-item:hover { background: #0a6cff; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #1e1e2e; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
     </style>
 </head>
 <body>
 <div class="desktop" id="desktop">
-    <!-- 桌面图标区 -->
     <div class="desktop-icons">
-        <div class="desktop-icon" data-app="terminal">
-            <i class="fas fa-terminal" style="color: #2ecc71"></i>
-            <span>终端</span>
-        </div>
-        <div class="desktop-icon" data-app="filemanager">
-            <i class="fas fa-folder-open" style="color: #f1c40f"></i>
-            <span>文件管理器</span>
-        </div>
-        <div class="desktop-icon" data-app="about">
-            <i class="fab fa-linux" style="color: #3498db"></i>
-            <span>关于 Linux</span>
-        </div>
+        <div class="desktop-icon" data-app="terminal"><i class="fas fa-terminal" style="color:#2ecc71"></i><span>终端</span></div>
+        <div class="desktop-icon" data-app="filemanager"><i class="fas fa-folder-open" style="color:#f1c40f"></i><span>文件管理器</span></div>
     </div>
-
-    <!-- 任务栏 -->
     <div class="taskbar">
-        <div class="start-area">
-            <div class="start-btn" id="startBtn">
-                <i class="fab fa-linux"></i>
-                <span>开始</span>
-            </div>
-        </div>
-        <div class="taskbar-apps"></div> <!-- 可预留展示运行中应用，不强制 -->
-        <div class="taskbar-tray">
-            <i class="fas fa-volume-up"></i>
-            <i class="fas fa-network-wired"></i>
-            <i class="fas fa-battery-full"></i>
-            <span class="clock" id="clock">--:--</span>
-        </div>
+        <div class="start-area"><div class="start-btn" id="startBtn"><i class="fab fa-linux"></i><span>开始</span></div></div>
+        <div class="taskbar-tray"><i class="fas fa-volume-up"></i><i class="fas fa-network-wired"></i><i class="fas fa-battery-full"></i><span class="clock" id="clock">--:--</span></div>
     </div>
-
-    <!-- 开始菜单 -->
     <div class="start-menu hidden" id="startMenu">
-        <div class="start-header">
-            <i class="fab fa-ubuntu"></i>
-            <span>Linux 发行版</span>
-        </div>
+        <div class="start-header"><i class="fab fa-ubuntu"></i><span>Linux 发行版</span></div>
         <div class="start-apps">
-            <div class="start-app-item" data-app="terminal">
-                <i class="fas fa-terminal"></i> <span>终端模拟器</span>
-            </div>
-            <div class="start-app-item" data-app="filemanager">
-                <i class="fas fa-folder-tree"></i> <span>文件管理器</span>
-            </div>
-            <div class="start-app-item" data-app="about">
-                <i class="fas fa-info-circle"></i> <span>关于系统</span>
-            </div>
-            <div class="start-app-item" id="fakePower">
-                <i class="fas fa-power-off"></i> <span>注销 / 锁定</span>
-            </div>
+            <div class="start-app-item" data-app="terminal"><i class="fas fa-terminal"></i><span>终端</span></div>
+            <div class="start-app-item" data-app="filemanager"><i class="fas fa-folder-tree"></i><span>文件管理器</span></div>
+            <div class="start-app-item" id="fakePower"><i class="fas fa-power-off"></i><span>锁定</span></div>
         </div>
     </div>
 </div>
 
 <script>
-    // ==================== 全局变量 ====================
-    const activeWindows = new Map();     // 存储打开窗口的DOM元素
+    // ========== 全局变量 ==========
+    const activeWindows = new Map();
     let globalZIndex = 800;
-    let javaBackendReady = false;        // 后端是否就绪
-    let currentDir = "/";                // 文件管理器当前路径
+    let javaBackendReady = false;
+    let currentDir = "/";
 
-    // ==================== 辅助函数 ====================
-    function updateClock() {
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-        document.getElementById('clock').innerText = timeStr;
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
+    // 时钟
+    function updateClock() { const now = new Date(); document.getElementById('clock').innerText = now.toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' }); }
+    setInterval(updateClock,1000); updateClock();
 
-    // 开始菜单逻辑
+    // 开始菜单
     const startBtn = document.getElementById('startBtn');
     const startMenu = document.getElementById('startMenu');
-    function toggleStartMenu(e) {
-        e.stopPropagation();
-        startMenu.classList.toggle('hidden');
-    }
+    function toggleStartMenu(e) { e.stopPropagation(); startMenu.classList.toggle('hidden'); }
     startBtn.addEventListener('click', toggleStartMenu);
-    document.addEventListener('click', function(e) {
-        if (!startMenu.contains(e.target) && e.target !== startBtn && !startBtn.contains(e.target)) {
-            startMenu.classList.add('hidden');
-        }
-    });
+    document.addEventListener('click', function(e) { if(!startMenu.contains(e.target) && e.target !== startBtn && !startBtn.contains(e.target)) startMenu.classList.add('hidden'); });
     startMenu.addEventListener('click', (e) => e.stopPropagation());
 
-    // 窗口拖拽逻辑 (通用)
+    // 窗口拖拽
     function makeWindowDraggable(windowEl, headerEl) {
-        let isDragging = false;
-        let offsetX, offsetY;
-        let startLeft, startTop;
-        const onMouseMove = (e) => {
-            if (!isDragging) return;
-            e.preventDefault();
-            let newLeft = startLeft + (e.clientX - offsetX);
-            let newTop = startTop + (e.clientY - offsetY);
-            const maxX = window.innerWidth - windowEl.offsetWidth;
-            const maxY = window.innerHeight - windowEl.offsetHeight - 10;
-            newLeft = Math.min(Math.max(newLeft, -windowEl.offsetWidth + 100), Math.max(maxX, 20));
-            newTop = Math.min(Math.max(newTop, 20), Math.max(maxY, 20));
-            windowEl.style.left = newLeft + 'px';
-            windowEl.style.top = newTop + 'px';
-        };
-        const onMouseUp = () => {
-            isDragging = false;
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
-        };
-        headerEl.addEventListener('mousedown', (e) => {
-            if (e.target.closest('.window-controls')) return;
-            e.preventDefault();
-            bringToFront(windowEl);
-            isDragging = true;
-            offsetX = e.clientX;
-            offsetY = e.clientY;
-            const rect = windowEl.getBoundingClientRect();
-            startLeft = rect.left;
-            startTop = rect.top;
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
-        });
+        let isDragging=false, offsetX,offsetY, startLeft,startTop;
+        const onMouseMove=(e)=>{ if(!isDragging)return; e.preventDefault(); let newLeft=startLeft+(e.clientX-offsetX), newTop=startTop+(e.clientY-offsetY); const maxX=window.innerWidth-windowEl.offsetWidth, maxY=window.innerHeight-windowEl.offsetHeight-10; newLeft=Math.min(Math.max(newLeft,-windowEl.offsetWidth+100),Math.max(maxX,20)); newTop=Math.min(Math.max(newTop,20),Math.max(maxY,20)); windowEl.style.left=newLeft+'px'; windowEl.style.top=newTop+'px'; };
+        const onMouseUp=()=>{ isDragging=false; document.removeEventListener('mousemove',onMouseMove); document.removeEventListener('mouseup',onMouseUp); };
+        headerEl.addEventListener('mousedown',(e)=>{ if(e.target.closest('.window-controls'))return; e.preventDefault(); bringToFront(windowEl); isDragging=true; offsetX=e.clientX; offsetY=e.clientY; const rect=windowEl.getBoundingClientRect(); startLeft=rect.left; startTop=rect.top; document.addEventListener('mousemove',onMouseMove); document.addEventListener('mouseup',onMouseUp); });
     }
-
-    function bringToFront(windowEl) {
-        globalZIndex++;
-        windowEl.style.zIndex = globalZIndex;
-        document.querySelectorAll('.window').forEach(w => w.classList.remove('active'));
-        windowEl.classList.add('active');
-    }
-
-    function closeWindow(appId, windowEl) {
-        if (activeWindows.has(appId)) {
-            windowEl.remove();
-            activeWindows.delete(appId);
-        }
-    }
-
-    // 打开窗口通用函数
-    function openApp(appId, title, contentGenerator, width = 540, height = 400) {
-        if (activeWindows.has(appId)) {
-            bringToFront(activeWindows.get(appId));
-            return;
-        }
-        const win = document.createElement('div');
-        win.className = 'window';
-        win.style.width = width + 'px';
-        win.style.height = height + 'px';
-        const left = Math.min(window.innerWidth - width - 40, Math.max(80, Math.random() * 200 + 30));
-        const topVal = Math.min(window.innerHeight - height - 70, Math.max(50, Math.random() * 150 + 30));
-        win.style.left = left + 'px';
-        win.style.top = topVal + 'px';
-        win.style.zIndex = ++globalZIndex;
-        const header = document.createElement('div');
-        header.className = 'window-header';
-        header.innerHTML = `
-            <div class="window-title">
-                <i class="fas ${getIconForApp(appId)}"></i>
-                <span>${title}</span>
-            </div>
-            <div class="window-controls">
-                <i class="fas fa-times close-window"></i>
-            </div>
-        `;
+    function bringToFront(windowEl) { globalZIndex++; windowEl.style.zIndex=globalZIndex; document.querySelectorAll('.window').forEach(w=>w.classList.remove('active')); windowEl.classList.add('active'); }
+    function closeWindow(appId,windowEl) { if(activeWindows.has(appId)){ windowEl.remove(); activeWindows.delete(appId); } }
+    function openApp(appId,title,contentGenerator,width=540,height=400) {
+        if(activeWindows.has(appId)){ bringToFront(activeWindows.get(appId)); return; }
+        const win=document.createElement('div'); win.className='window'; win.style.width=width+'px'; win.style.height=height+'px';
+        const left=Math.min(window.innerWidth-width-40,Math.max(80,Math.random()*200+30));
+        const topVal=Math.min(window.innerHeight-height-70,Math.max(50,Math.random()*150+30));
+        win.style.left=left+'px'; win.style.top=topVal+'px'; win.style.zIndex=++globalZIndex;
+        const header=document.createElement('div'); header.className='window-header';
+        header.innerHTML=`<div class="window-title"><i class="fas ${appId==='terminal'?'fa-terminal':'fa-folder-open'}"></i><span>${title}</span></div><div class="window-controls"><i class="fas fa-times close-window"></i></div>`;
         win.appendChild(header);
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'window-content';
-        contentGenerator(contentDiv);
-        win.appendChild(contentDiv);
+        const contentDiv=document.createElement('div'); contentDiv.className='window-content'; contentGenerator(contentDiv); win.appendChild(contentDiv);
         document.body.appendChild(win);
-        const closeBtn = header.querySelector('.close-window');
-        closeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            closeWindow(appId, win);
-        });
-        win.addEventListener('mousedown', () => bringToFront(win));
-        makeWindowDraggable(win, header);
-        activeWindows.set(appId, win);
-        bringToFront(win);
+        const closeBtn=header.querySelector('.close-window'); closeBtn.addEventListener('click',(e)=>{ e.stopPropagation(); closeWindow(appId,win); });
+        win.addEventListener('mousedown',()=>bringToFront(win)); makeWindowDraggable(win,header);
+        activeWindows.set(appId,win); bringToFront(win);
     }
 
-    function getIconForApp(appId) {
-        if (appId === 'terminal') return 'fa-terminal';
-        if (appId === 'filemanager') return 'fa-folder-open';
-        return 'fa-info-circle';
-    }
-
-    function findAppIdByWindow(winEl) {
-        for (let [key, val] of activeWindows.entries()) {
-            if (val === winEl) return key;
-        }
-        return null;
-    }
-
-    // ==================== 真实终端（基于后端） ====================
-    let terminalOutputCallback = null;  // 用于实时输出
-    function generateRealTerminalContent(container) {
-        container.innerHTML = `
-            <div class="terminal-body">
-                <div class="terminal-output" id="realTermOutput"></div>
-                <div class="terminal-input-line">
-                    <span class="terminal-prompt" id="termPrompt">$ </span>
-                    <input type="text" class="terminal-input" id="realTermInput" autocomplete="off">
-                </div>
+    // 预览模态框
+    function showTextModal(title, content) {
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:20000;';
+        const dialog = document.createElement('div');
+        dialog.style.cssText = 'background:#1e1e2e;border-radius:12px;width:70%;max-width:900px;height:60%;display:flex;flex-direction:column;box-shadow:0 8px 20px black;';
+        dialog.innerHTML = `
+            <div style="padding:12px;background:#2d2d3a;border-radius:12px 12px 0 0;display:flex;justify-content:space-between;">
+                <span><i class="fas fa-file-alt"></i> ${escapeHtml(title)}</span>
+                <span style="cursor:pointer;font-weight:bold;font-size:18px;" onclick="this.closest('.modal-overlay').remove()">&times;</span>
             </div>
+            <pre style="margin:0;padding:16px;overflow:auto;white-space:pre-wrap;font-family:monospace;font-size:13px;color:#ccc;flex:1;">${escapeHtml(content)}</pre>
         `;
-        const outputDiv = container.querySelector('#realTermOutput');
-        const inputField = container.querySelector('#realTermInput');
-
-        // 注册全局回调，接收后端推送的输出
-        window.onTerminalOutput = function(text) {
-            outputDiv.innerHTML += text;
-            outputDiv.scrollTop = outputDiv.scrollHeight;
-        };
-        window.onTerminalError = function(err) {
-            outputDiv.innerHTML += `\r\n\x1b[31m${err}\x1b[0m\r\n`;
-            outputDiv.scrollTop = outputDiv.scrollHeight;
-        };
-        // 发送命令到后端
-        inputField.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                const cmd = inputField.value;
-                if (cmd.trim() === '') return;
-                outputDiv.innerHTML += `$ ${cmd}\n`;
-                if (javaBackendReady && window.javaBackend) {
-                    window.javaBackend.sendCommand(cmd + "\n");
-                } else {
-                    outputDiv.innerHTML += `\n[后端未就绪，无法执行命令]\n`;
-                }
-                inputField.value = '';
-            }
-        });
-        inputField.focus();
-        // 发送一个初始空命令或欢迎语
-        outputDiv.innerHTML += "[SSH 终端已连接，输入命令即可执行]\n";
+        modal.appendChild(dialog);
+        modal.classList.add('modal-overlay');
+        document.body.appendChild(modal);
+        modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
     }
 
-    // 真实文件管理器
+    function escapeHtml(text) {
+        return text.replace(/[&<>]/g, function(m) {
+            if (m === '&') return '&amp;';
+            if (m === '<') return '&lt;';
+            if (m === '>') return '&gt;';
+            return m;
+        });
+    }
+
+    // 右键菜单管理
+    let currentContextMenu = null;
+    function hideContextMenu() { if(currentContextMenu){ currentContextMenu.remove(); currentContextMenu=null; } }
+    document.addEventListener('click', hideContextMenu);
+    // 注意：不要在这里加 document.addEventListener('contextmenu', hideContextMenu)，会干扰菜单自身的右键
+
+    // ========== 文件管理器 ==========
     function generateRealFileManagerContent(container) {
         container.innerHTML = `
-            <div style="margin-bottom:12px;">
+            <div class="file-toolbar">
+                <button id="upBtn" title="向上"><i class="fas fa-level-up-alt"></i> 向上</button>
                 <button id="refreshBtn"><i class="fas fa-sync-alt"></i> 刷新</button>
                 <button id="uploadBtn"><i class="fas fa-upload"></i> 上传</button>
                 <button id="mkdirBtn"><i class="fas fa-folder-plus"></i> 新建文件夹</button>
                 <input type="file" id="fileUploadInput" style="display:none" />
-                <span id="currentPathDisplay" style="margin-left:12px;">路径: /</span>
+                <span id="currentPathDisplay" style="margin-left:12px; font-size:12px;">路径: /</span>
             </div>
             <ul class="file-list" id="realFileList"></ul>
         `;
         const fileListUl = container.querySelector('#realFileList');
         const pathSpan = container.querySelector('#currentPathDisplay');
+        const upBtn = container.querySelector('#upBtn');
         const refreshBtn = container.querySelector('#refreshBtn');
         const uploadBtn = container.querySelector('#uploadBtn');
         const mkdirBtn = container.querySelector('#mkdirBtn');
@@ -3014,6 +2601,7 @@ spring.application.name=server-manager-tool
             currentDir = path;
             pathSpan.innerText = `路径: ${currentDir}`;
             fileListUl.innerHTML = '';
+            files.sort((a,b) => (b.isDirectory - a.isDirectory) || a.name.localeCompare(b.name));
             for (let f of files) {
                 const li = document.createElement('li');
                 const nameSpan = document.createElement('div');
@@ -3021,37 +2609,122 @@ spring.application.name=server-manager-tool
                 nameSpan.innerHTML = f.isDirectory ? `📁 ${f.name}` : `📄 ${f.name}`;
                 if (f.isDirectory) {
                     nameSpan.style.cursor = 'pointer';
-                    nameSpan.onclick = () => loadDir(f.fullPath);
+                    nameSpan.onclick = (e) => { e.stopPropagation(); loadDir(f.fullPath); };
                 }
+
                 const actionsDiv = document.createElement('div');
                 actionsDiv.className = 'file-actions';
                 if (!f.isDirectory) {
                     const dlBtn = document.createElement('button');
                     dlBtn.innerHTML = '<i class="fas fa-download"></i>';
-                    dlBtn.title = "下载";
-                    dlBtn.onclick = (e) => {
-                        e.stopPropagation();
-                        window.javaBackend.downloadFile(f.fullPath, f.name);
-                    };
+                    dlBtn.onclick = (e) => { e.stopPropagation(); window.javaBackend.downloadFile(f.fullPath, f.name); };
                     actionsDiv.appendChild(dlBtn);
                 }
                 const delBtn = document.createElement('button');
                 delBtn.innerHTML = '<i class="fas fa-trash"></i>';
-                delBtn.title = "删除";
-                delBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    if (confirm(`确定删除 ${f.name} 吗？`)) {
-                        window.javaBackend.deleteFile(f.fullPath);
-                        setTimeout(() => loadDir(currentDir), 500);
-                    }
-                };
+                delBtn.onclick = (e) => { e.stopPropagation(); if(confirm(`确定删除 ${f.name} 吗？`)){ window.javaBackend.deleteFile(f.fullPath); setTimeout(()=>loadDir(currentDir),500); } };
                 actionsDiv.appendChild(delBtn);
                 li.appendChild(nameSpan);
                 li.appendChild(actionsDiv);
+
+                // 右键菜单（重点：增加“打开”项）
+                li.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    hideContextMenu();
+                    const menu = document.createElement('div');
+                    menu.className = 'context-menu';
+                    menu.style.left = e.clientX + 'px';
+                    menu.style.top = e.clientY + 'px';
+
+                    // 新建文件夹
+                    const newFolderItem = document.createElement('div');
+                    newFolderItem.className = 'context-menu-item';
+                    newFolderItem.innerHTML = '<i class="fas fa-folder-plus"></i> 新建文件夹';
+                    newFolderItem.onclick = () => { const name=prompt("新建文件夹名称:"); if(name) mkdir(name); hideContextMenu(); };
+                    menu.appendChild(newFolderItem);
+
+                    // 刷新
+                    const refreshItem = document.createElement('div');
+                    refreshItem.className = 'context-menu-item';
+                    refreshItem.innerHTML = '<i class="fas fa-sync-alt"></i> 刷新';
+                    refreshItem.onclick = () => { loadDir(currentDir); hideContextMenu(); };
+                    menu.appendChild(refreshItem);
+
+                    // 如果是文件，添加“打开”菜单（cat 并弹窗显示）
+                    if (!f.isDirectory) {
+                        const openItem = document.createElement('div');
+                        openItem.className = 'context-menu-item';
+                        openItem.innerHTML = '<i class="fas fa-file-alt"></i> 打开';
+                        openItem.onclick = () => {
+                            try {
+                                const content = window.javaBackend.readFileContent(f.fullPath);
+                                if (content.startsWith("ERROR:")) {
+                                    alert(content);
+                                } else {
+                                    showTextModal(f.name, content);
+                                }
+                            } catch (err) {
+                                alert("打开文件失败: " + err.message);
+                            }
+                            hideContextMenu();
+                        };
+                        menu.appendChild(openItem);
+
+                        // 删除文件
+                        const deleteItem = document.createElement('div');
+                        deleteItem.className = 'context-menu-item';
+                        deleteItem.innerHTML = '<i class="fas fa-trash"></i> 删除';
+                        deleteItem.onclick = () => {
+                            if(confirm(`删除 ${f.name} ?`)){
+                                window.javaBackend.deleteFile(f.fullPath);
+                                setTimeout(()=>loadDir(currentDir),500);
+                            }
+                            hideContextMenu();
+                        };
+                        menu.appendChild(deleteItem);
+                    } else {
+                        // 目录：删除目录（空目录）
+                        const deleteDirItem = document.createElement('div');
+                        deleteDirItem.className = 'context-menu-item';
+                        deleteDirItem.innerHTML = '<i class="fas fa-trash"></i> 删除目录';
+                        deleteDirItem.onclick = () => {
+                            if(confirm(`删除目录 ${f.name}？只允许删除空目录`)){
+                                window.javaBackend.deleteFile(f.fullPath);
+                                setTimeout(()=>loadDir(currentDir),500);
+                            }
+                            hideContextMenu();
+                        };
+                        menu.appendChild(deleteDirItem);
+                    }
+
+                    document.body.appendChild(menu);
+                    currentContextMenu = menu;
+                    // 点击其他地方关闭菜单（延迟添加，避免立即触发）
+                    setTimeout(() => {
+                        const closeHandler = () => { hideContextMenu(); document.removeEventListener('click', closeHandler); };
+                        document.addEventListener('click', closeHandler);
+                    }, 10);
+                });
                 fileListUl.appendChild(li);
             }
         }
 
+        async function mkdir(name) {
+            if(!name) return;
+            const newPath = currentDir.endsWith('/') ? currentDir + name : currentDir + '/' + name;
+            window.javaBackend.createDirectory(newPath);
+            setTimeout(()=>loadDir(currentDir),500);
+        }
+
+        function goUp() {
+            if (currentDir === '/') return;
+            let parent = currentDir.substring(0, currentDir.lastIndexOf('/'));
+            if (parent === '') parent = '/';
+            loadDir(parent);
+        }
+
+        upBtn.onclick = goUp;
         refreshBtn.onclick = () => loadDir(currentDir);
         uploadBtn.onclick = () => fileInput.click();
         fileInput.onchange = (e) => {
@@ -3065,151 +2738,28 @@ spring.application.name=server-manager-tool
             reader.readAsDataURL(file);
             fileInput.value = '';
         };
-        mkdirBtn.onclick = () => {
-            const name = prompt("请输入新文件夹名称:");
-            if (name && name.trim()) {
-                const newPath = currentDir.endsWith('/') ? currentDir + name : currentDir + '/' + name;
-                window.javaBackend.createDirectory(newPath);
-                setTimeout(() => loadDir(currentDir), 500);
-            }
-        };
+        mkdirBtn.onclick = () => { const name = prompt("输入文件夹名:"); if(name) mkdir(name); };
 
-        // 全局回调
-        window.onFileOperationComplete = (op, path) => {
-            if (op === 'delete' || op === 'mkdir') loadDir(currentDir);
-        };
-        window.onUploadComplete = (fileName) => {
-            alert(`上传 ${fileName} 完成`);
-            loadDir(currentDir);
-        };
-        window.onDownloadReady = (remotePath, fileName, b64) => {
-            const a = document.createElement('a');
-            a.href = 'data:application/octet-stream;base64,' + b64;
-            a.download = fileName;
-            a.click();
-        };
+        window.onFileOperationComplete = (op) => { if(op==='delete'||op==='mkdir') loadDir(currentDir); };
+        window.onUploadComplete = (fileName) => { alert(`上传 ${fileName} 完成`); loadDir(currentDir); };
+        window.onDownloadReady = (remotePath, fileName, b64) => { const a=document.createElement('a'); a.href='data:application/octet-stream;base64,'+b64; a.download=fileName; a.click(); };
         window.onError = (msg) => alert("错误: " + msg);
 
         loadDir(currentDir);
     }
 
-    // ==================== 模拟终端（备用/离线演示） ====================
-    function generateMockTerminalContent(container) {
-        container.innerHTML = `
-            <div class="terminal-body">
-                <div class="terminal-output" id="mockTermOutput"></div>
-                <div class="terminal-input-line">
-                    <span class="terminal-prompt">user@linux:~$</span>
-                    <input type="text" class="terminal-input" id="mockTermInput" autocomplete="off">
-                </div>
-            </div>
-        `;
-        const outputDiv = container.querySelector('#mockTermOutput');
-        const inputField = container.querySelector('#mockTermInput');
-        let currentDir = "~";
-        function addLine(text, isError = false) {
-            const line = document.createElement('div');
-            line.style.color = isError ? '#f66' : '#9f9';
-            line.style.marginBottom = '4px';
-            line.innerHTML = text;
-            outputDiv.appendChild(line);
-            outputDiv.scrollTop = outputDiv.scrollHeight;
-        }
-        function printWelcome() {
-            addLine('Linux 模拟终端 (离线演示模式) — 后端未连接');
-            addLine('可用命令: help, ls, whoami, pwd, clear, date, echo');
-            addLine('--------------------------------------------------');
-        }
-        function executeCommand(cmd) {
-            const parts = cmd.trim().split(' ');
-            const mainCmd = parts[0].toLowerCase();
-            const args = parts.slice(1);
-            if (mainCmd === 'clear') { outputDiv.innerHTML = ''; printWelcome(); return; }
-            if (mainCmd === 'help') { addLine('ls, whoami, pwd, date, clear, echo'); return; }
-            if (mainCmd === 'ls') { addLine('Desktop  Documents  Downloads'); return; }
-            if (mainCmd === 'whoami') { addLine('linuxuser'); return; }
-            if (mainCmd === 'pwd') { addLine(`/home/linuxuser/${currentDir === '~' ? '' : currentDir}`); return; }
-            if (mainCmd === 'date') { addLine(new Date().toString()); return; }
-            if (mainCmd === 'echo') { addLine(args.join(' ') || ''); return; }
-            addLine(`命令未找到: ${mainCmd}`, true);
-        }
-        function handleCommand() {
-            const input = inputField.value;
-            if (input.trim() === '') return;
-            addLine(`user@linux:~$ ${input}`);
-            executeCommand(input);
-            inputField.value = '';
-        }
-        inputField.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); handleCommand(); }
-        });
-        printWelcome();
-        inputField.focus();
-    }
+    // 占位终端生成器（点击桌面终端图标时退出）
+    function generateRealTerminalContent(container) { container.innerHTML = '<div>终端已重定向到退出桌面</div>'; }
 
-    // 模拟文件管理器（备用）
-    function generateMockFileManagerContent(container) {
-        const fileStructure = [
-            { name: '📁 家目录 (Home)', type: 'dir' },
-            { name: '📄 系统信息.txt', type: 'file', size: '1.2 KB' },
-            { name: '📄 安装指南.md', type: 'file', size: '3.8 KB' },
-            { name: '📁 etc (系统配置)', type: 'dir' }
-        ];
-        const ul = document.createElement('ul');
-        ul.className = 'file-list';
-        fileStructure.forEach(item => {
-            const li = document.createElement('li');
-            li.innerHTML = `<div class="file-name"><i class="fas ${item.type === 'dir' ? 'fa-folder' : 'fa-file-alt'}"></i> <span>${item.name}</span></div>`;
-            li.addEventListener('click', () => alert(`[模拟] 打开 ${item.name}\n(后端未连接，仅演示界面)`));
-            ul.appendChild(li);
-        });
-        const infoDiv = document.createElement('div');
-        infoDiv.style.marginBottom = '12px';
-        infoDiv.style.padding = '8px';
-        infoDiv.style.background = '#2a2e40';
-        infoDiv.style.borderRadius = '8px';
-        infoDiv.innerHTML = '<i class="fas fa-hdd"></i> 离线模拟模式 - 请等待后端连接';
-        container.appendChild(infoDiv);
-        container.appendChild(ul);
-    }
-
-    // ---------- 关于Linux (保持不变，纯模拟) ----------
-    function generateAboutContent(container) {
-        container.innerHTML = `
-            <div style="text-align: center;">
-                <i class="fab fa-linux" style="font-size: 64px; color: #22aa55; margin-bottom: 16px; display: block;"></i>
-                <h3>Linux 可视化桌面</h3>
-                <p style="margin: 10px 0;">发行版: Ubuntu 22.04 LTS (仿生窗口风格)</p>
-                <p>内核版本: 5.15.0-91-generic</p>
-                <p>桌面环境: Linux Desktop (Windows-like UI)</p>
-                <hr style="margin: 15px 0; border-color:#334;">
-                <p>© 开源精神 · 自由软件</p>
-                <p><i class="fas fa-terminal"></i> 终端支持远程 SSH | <i class="fas fa-folder"></i> 文件管理器真实操作</p>
-                <button id="fakeUpdate" style="margin-top:12px; background:#3b6e4c;border:none;padding:6px 12px;border-radius:20px;color:white;cursor:pointer;">检查更新 (演示)</button>
-            </div>
-        `;
-        const btn = container.querySelector('#fakeUpdate');
-        if(btn) btn.addEventListener('click', () => alert('当前已是最新版本 (演示模拟)'));
-    }
-
-    // ==================== 应用打开逻辑（根据后端就绪状态选择真实或模拟） ====================
+    // 应用入口
     function openTerminal() {
-        openApp('terminal', '终端模拟器', (container) => {
-            if (javaBackendReady && window.javaBackend) {
-                generateRealTerminalContent(container);
-            } else {
-                generateMockTerminalContent(container);
-                // 等待后端就绪后自动刷新
-                const checkInterval = setInterval(() => {
-                    if (javaBackendReady && window.javaBackend && activeWindows.has('terminal')) {
-                        clearInterval(checkInterval);
-                        const win = activeWindows.get('terminal');
-                        const contentDiv = win.querySelector('.window-content');
-                        if (contentDiv) generateRealTerminalContent(contentDiv);
-                    }
-                }, 1000);
-            }
-        }, 580, 400);
+        if (window.javaBackend && typeof window.javaBackend.exitToTerminal === 'function') {
+            window.javaBackend.exitToTerminal();
+        } else if (window.exitToTerminal) {
+            window.exitToTerminal();
+        } else {
+            alert("无法返回终端，请检查后端连接");
+        }
     }
 
     function openFileManager() {
@@ -3217,89 +2767,53 @@ spring.application.name=server-manager-tool
             if (javaBackendReady && window.javaBackend) {
                 generateRealFileManagerContent(container);
             } else {
-                generateMockFileManagerContent(container);
-                const checkInterval = setInterval(() => {
+                container.innerHTML = '<div style="padding:20px;text-align:center;">等待后端连接...</div>';
+                const interval = setInterval(() => {
                     if (javaBackendReady && window.javaBackend && activeWindows.has('filemanager')) {
-                        clearInterval(checkInterval);
+                        clearInterval(interval);
                         const win = activeWindows.get('filemanager');
                         const contentDiv = win.querySelector('.window-content');
                         if (contentDiv) generateRealFileManagerContent(contentDiv);
                     }
                 }, 1000);
             }
-        }, 600, 450);
+        }, 650, 480);
     }
 
-    function openAbout() {
-        openApp('about', '关于 Linux 系统', generateAboutContent, 500, 380);
-    }
-
-    // ==================== 后端就绪回调（由 Java 调用） ====================
+    // 后端就绪回调
     window.onJavaBackendReady = function() {
         javaBackendReady = true;
-        console.log("Java backend ready, switching to real mode.");
-        // 如果已经打开了终端或文件管理器窗口，自动刷新内容
-        if (activeWindows.has('terminal')) {
-            const win = activeWindows.get('terminal');
-            const contentDiv = win.querySelector('.window-content');
-            if (contentDiv) generateRealTerminalContent(contentDiv);
-        }
+        console.log("Java backend ready");
         if (activeWindows.has('filemanager')) {
             const win = activeWindows.get('filemanager');
             const contentDiv = win.querySelector('.window-content');
-            if (contentDiv) generateRealFileManagerContent(contentDiv);
+            if (contentDiv && contentDiv.innerHTML.includes('等待后端连接')) {
+                generateRealFileManagerContent(contentDiv);
+            }
         }
     };
 
-    // ==================== 事件绑定 ====================
-    const desktopIcons = document.querySelectorAll('.desktop-icon');
-    desktopIcons.forEach(icon => {
+    // 桌面图标事件
+    document.querySelectorAll('.desktop-icon').forEach(icon => {
         icon.addEventListener('dblclick', (e) => {
             e.stopPropagation();
             const app = icon.getAttribute('data-app');
             if (app === 'terminal') openTerminal();
             else if (app === 'filemanager') openFileManager();
-            else if (app === 'about') openAbout();
         });
     });
-
-    const startItems = document.querySelectorAll('.start-app-item');
-    startItems.forEach(item => {
+    document.querySelectorAll('.start-app-item').forEach(item => {
         item.addEventListener('click', (e) => {
             const app = item.getAttribute('data-app');
             if (app === 'terminal') openTerminal();
             else if (app === 'filemanager') openFileManager();
-            else if (app === 'about') openAbout();
-            if (item.id === 'fakePower') {
-                alert('锁定 / 注销模拟\n(实际功能未实现)');
-            }
+            else if (item.id === 'fakePower') alert("锁定功能暂未实现");
             startMenu.classList.add('hidden');
         });
     });
 
-    window.addEventListener('resize', () => {
-        for(let [appId, winEl] of activeWindows.entries()) {
-            const rect = winEl.getBoundingClientRect();
-            const maxX = window.innerWidth - winEl.offsetWidth;
-            const maxY = window.innerHeight - winEl.offsetHeight - 10;
-            let newLeft = rect.left;
-            let newTop = rect.top;
-            if (rect.right > window.innerWidth) newLeft = Math.max(20, maxX);
-            if (rect.bottom > window.innerHeight - 10) newTop = Math.max(20, maxY);
-            if (newLeft !== rect.left) winEl.style.left = newLeft + 'px';
-            if (newTop !== rect.top) winEl.style.top = newTop + 'px';
-        }
-    });
-
-    document.querySelector('.desktop').addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        alert('桌面右键菜单 (演示): 可新建文件夹 / 更改壁纸，此版本仅展示UI。');
-    });
-
-    // 首次打开显示关于窗口
-    setTimeout(() => {
-        openAbout();
-    }, 200);
+    window.addEventListener('resize', () => {});
+    document.querySelector('.desktop').addEventListener('contextmenu', (e) => { e.preventDefault(); alert("桌面右键菜单（演示）"); });
 </script>
 </body>
 </html>

@@ -152,9 +152,46 @@ public class WebViewBackend {
         });
     }
 
+    public String readFileContent(String remotePath) {
+        System.out.println(55656);
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            session.downloadFile(remotePath, baos);
+            byte[] bytes = baos.toByteArray();
+
+            // 简单文本检测（连续空字节或异常控制字符视为二进制）
+            boolean isText = true;
+            int nullCount = 0;
+            for (int i = 0; i < Math.min(bytes.length, 2048); i++) {
+                byte b = bytes[i];
+                if (b == 0) {
+                    nullCount++;
+                    if (nullCount > 10) {
+                        isText = false;
+                        break;
+                    }
+                } else if (b < 32 && b != 9 && b != 10 && b != 13 && b != 12) {
+                    isText = false;
+                    break;
+                }
+            }
+
+            if (!isText) {
+                return "ERROR:二进制文件，无法预览";
+            }
+
+            String content = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            // 直接返回内容，不封装JSON，避免转义问题
+            return "SUCCESS:" + content;
+        } catch (Exception e) {
+            return "ERROR:" + e.getMessage();
+        }
+    }
+
+    // 复用已有的 escapeJson 方法
     private String escapeJson(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
     private String escapeJsString(String s) {
