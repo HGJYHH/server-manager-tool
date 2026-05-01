@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Linux 可视化桌面 - 仿 Windows 风格（真实 SSH 后端）</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Helvetica Neue', sans-serif;
+        }
+        .desktop {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 20% 30%, #1a2a3a, #0b1219);
+            overflow: hidden;
+        }
+        .desktop-icons {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            z-index: 10;
+        }
+        .desktop-icon {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 85px;
+            cursor: pointer;
+            padding: 8px 4px;
+            border-radius: 8px;
+            transition: background 0.2s;
+            color: white;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+        .desktop-icon:hover {
+            background: rgba(255,255,255,0.15);
+            backdrop-filter: blur(4px);
+        }
+        .desktop-icon i {
+            font-size: 40px;
+            margin-bottom: 6px;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+        }
+        .desktop-icon span {
+            font-size: 13px;
+            text-align: center;
+            font-weight: 500;
+        }
+        .taskbar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 48px;
+            background: rgba(20, 25, 35, 0.85);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(255,255,255,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            z-index: 1000;
+            color: white;
+            font-size: 14px;
+        }
+        .start-area {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .start-btn {
+            background: rgba(255,255,255,0.15);
+            border-radius: 8px;
+            padding: 6px 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+        .start-btn:hover {
+            background: rgba(255,255,255,0.25);
+        }
+        .start-btn i {
+            font-size: 18px;
+        }
+        .taskbar-tray {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            background: rgba(0,0,0,0.3);
+            padding: 4px 12px;
+            border-radius: 20px;
+        }
+        .clock {
+            font-family: monospace;
+            font-weight: 500;
+        }
+        .start-menu {
+            position: fixed;
+            bottom: 52px;
+            left: 12px;
+            width: 280px;
+            background: rgba(28, 32, 44, 0.92);
+            backdrop-filter: blur(30px);
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            z-index: 1100;
+            overflow: hidden;
+            color: white;
+        }
+        .start-header {
+            padding: 20px 20px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .start-header i {
+            font-size: 38px;
+            color: #f0b37b;
+        }
+        .start-apps {
+            padding: 12px 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .start-app-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .start-app-item:hover {
+            background: rgba(255,255,255,0.15);
+        }
+        .window {
+            position: absolute;
+            min-width: 480px;
+            min-height: 360px;
+            background: rgba(30, 34, 48, 0.95);
+            backdrop-filter: blur(12px);
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.3);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 500;
+            color: #eee;
+        }
+        .window.active {
+            z-index: 999;
+            border-color: rgba(100, 150, 255, 0.6);
+        }
+        .window-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            background: rgba(0,0,0,0.3);
+            cursor: grab;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            font-weight: 500;
+        }
+        .window-header:active {
+            cursor: grabbing;
+        }
+        .window-controls {
+            display: flex;
+            gap: 12px;
+        }
+        .window-controls i {
+            cursor: pointer;
+            opacity: 0.7;
+        }
+        .window-controls i:hover {
+            opacity: 1;
+            color: #ff9f4a;
+        }
+        .window-content {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+            background: rgba(20, 24, 36, 0.7);
+            font-size: 14px;
+        }
+        .terminal-body {
+            background: #0c0f18;
+            font-family: 'Courier New', monospace;
+            padding: 12px;
+            border-radius: 8px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .terminal-output {
+            flex: 1;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-bottom: 8px;
+            color: #0f0;
+            font-size: 13px;
+        }
+        .terminal-input-line {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #00000055;
+            padding: 6px;
+            border-radius: 6px;
+        }
+        .terminal-prompt {
+            color: #0f0;
+            font-weight: bold;
+        }
+        .terminal-input {
+            background: transparent;
+            border: none;
+            color: #0f0;
+            outline: none;
+            flex: 1;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        .file-list {
+            list-style: none;
+        }
+        .file-list li {
+            padding: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+        }
+        .file-list li:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .file-list li .file-name {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+        }
+        .file-actions button {
+            background: transparent;
+            border: none;
+            color: #ccc;
+            cursor: pointer;
+            margin-left: 8px;
+        }
+        .file-actions button:hover {
+            color: white;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e1e2e;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+<div class="desktop" id="desktop">
+    <div class="desktop-icons">
+        <div class="desktop-icon" data-app="terminal">
+            <i class="fas fa-terminal" style="color: #2ecc71"></i>
+            <span>终端</span>
+        </div>
+        <div class="desktop-icon" data-app="filemanager">
+            <i class="fas fa-folder-open" style="color: #f1c40f"></i>
+            <span>文件管理器</span>
+        </div>
+    </div>
+
+    <div class="taskbar">
+        <div class="start-area">
+            <div class="start-btn" id="startBtn">
+                <i class="fab fa-linux"></i>
+                <span>开始</span>
+            </div>
+        </div>
+        <div class="taskbar-tray">
+            <i class="fas fa-volume-up"></i>
+            <i class="fas fa-network-wired"></i>
+            <i class="fas fa-battery-full"></i>
+            <span class="clock" id="clock">--:--</span>
+        </div>
+    </div>
+
+    <div class="start-menu hidden" id="startMenu">
+        <div class="start-header">
+            <i class="fab fa-ubuntu"></i>
+            <span>Linux 发行版</span>
+        </div>
+        <div class="start-apps">
+            <div class="start-app-item" data-app="terminal">
+                <i class="fas fa-terminal"></i> <span>终端</span>
+            </div>
+            <div class="start-app-item" data-app="filemanager">
+                <i class="fas fa-folder-tree"></i> <span>文件管理器</span>
+            </div>
+            <div class="start-app-item" id="fakePower">
+                <i class="fas fa-power-off"></i> <span>锁定</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ========== 全局变量 ==========
+    const activeWindows = new Map();
+    let globalZIndex = 800;
+    let javaBackendReady = false;
+    let currentDir = "/";
+
+    // 时钟
+    function updateClock() {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        document.getElementById('clock').innerText = timeStr;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // 开始菜单
+    const startBtn = document.getElementById('startBtn');
+    const startMenu = document.getElementById('startMenu');
+    function toggleStartMenu(e) {
+        e.stopPropagation();
+        startMenu.classList.toggle('hidden');
+    }
+    startBtn.addEventListener('click', toggleStartMenu);
+    document.addEventListener('click', function(e) {
+        if (!startMenu.contains(e.target) && e.target !== startBtn && !startBtn.contains(e.target)) {
+            startMenu.classList.add('hidden');
+        }
+    });
+    startMenu.addEventListener('click', (e) => e.stopPropagation());
+
+    // 窗口拖拽
+    function makeWindowDraggable(windowEl, headerEl) {
+        let isDragging = false, offsetX, offsetY, startLeft, startTop;
+        const onMouseMove = (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+            let newLeft = startLeft + (e.clientX - offsetX);
+            let newTop = startTop + (e.clientY - offsetY);
+            const maxX = window.innerWidth - windowEl.offsetWidth;
+            const maxY = window.innerHeight - windowEl.offsetHeight - 10;
+            newLeft = Math.min(Math.max(newLeft, -windowEl.offsetWidth + 100), Math.max(maxX, 20));
+            newTop = Math.min(Math.max(newTop, 20), Math.max(maxY, 20));
+            windowEl.style.left = newLeft + 'px';
+            windowEl.style.top = newTop + 'px';
+        };
+        const onMouseUp = () => {
+            isDragging = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+        headerEl.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.window-controls')) return;
+            e.preventDefault();
+            bringToFront(windowEl);
+            isDragging = true;
+            offsetX = e.clientX;
+            offsetY = e.clientY;
+            const rect = windowEl.getBoundingClientRect();
+            startLeft = rect.left;
+            startTop = rect.top;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+    }
+
+    function bringToFront(windowEl) {
+        globalZIndex++;
+        windowEl.style.zIndex = globalZIndex;
+        document.querySelectorAll('.window').forEach(w => w.classList.remove('active'));
+        windowEl.classList.add('active');
+    }
+
+    function closeWindow(appId, windowEl) {
+        if (activeWindows.has(appId)) {
+            windowEl.remove();
+            activeWindows.delete(appId);
+        }
+    }
+
+    function openApp(appId, title, contentGenerator, width = 540, height = 400) {
+        if (activeWindows.has(appId)) {
+            bringToFront(activeWindows.get(appId));
+            return;
+        }
+        const win = document.createElement('div');
+        win.className = 'window';
+        win.style.width = width + 'px';
+        win.style.height = height + 'px';
+        const left = Math.min(window.innerWidth - width - 40, Math.max(80, Math.random() * 200 + 30));
+        const topVal = Math.min(window.innerHeight - height - 70, Math.max(50, Math.random() * 150 + 30));
+        win.style.left = left + 'px';
+        win.style.top = topVal + 'px';
+        win.style.zIndex = ++globalZIndex;
+        const header = document.createElement('div');
+        header.className = 'window-header';
+        header.innerHTML = `
+            <div class="window-title">
+                <i class="fas ${appId === 'terminal' ? 'fa-terminal' : 'fa-folder-open'}"></i>
+                <span>${title}</span>
+            </div>
+            <div class="window-controls">
+                <i class="fas fa-times close-window"></i>
+            </div>
+        `;
+        win.appendChild(header);
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'window-content';
+        contentGenerator(contentDiv);
+        win.appendChild(contentDiv);
+        document.body.appendChild(win);
+        const closeBtn = header.querySelector('.close-window');
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeWindow(appId, win);
+        });
+        win.addEventListener('mousedown', () => bringToFront(win));
+        makeWindowDraggable(win, header);
+        activeWindows.set(appId, win);
+        bringToFront(win);
+    }
+
+    // 真实终端内容生成器（保留但不会使用，因为终端图标被重定向到退出）
+    function generateRealTerminalContent(container) {
+        container.innerHTML = `
+            <div class="terminal-body">
+                <div class="terminal-output" id="realTermOutput"></div>
+                <div class="terminal-input-line">
+                    <span class="terminal-prompt">$ </span>
+                    <input type="text" class="terminal-input" id="realTermInput" autocomplete="off">
+                </div>
+            </div>
+        `;
+        const outputDiv = container.querySelector('#realTermOutput');
+        const inputField = container.querySelector('#realTermInput');
+        window.onTerminalOutput = function(text) {
+            outputDiv.innerHTML += text;
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        };
+        window.onTerminalError = function(err) {
+            outputDiv.innerHTML += `\r\n\x1b[31m${err}\x1b[0m\r\n`;
+        };
+        inputField.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const cmd = inputField.value;
+                if (cmd.trim() === '') return;
+                outputDiv.innerHTML += `$ ${cmd}\n`;
+                if (javaBackendReady && window.javaBackend) {
+                    window.javaBackend.sendCommand(cmd + "\n");
+                } else {
+                    outputDiv.innerHTML += `\n[后端未就绪]\n`;
+                }
+                inputField.value = '';
+            }
+        });
+        inputField.focus();
+        outputDiv.innerHTML += "[SSH 终端已连接]\n";
+    }
+
+    // 真实文件管理器
+    function generateRealFileManagerContent(container) {
+        container.innerHTML = `
+            <div style="margin-bottom:12px;">
+                <button id="refreshBtn"><i class="fas fa-sync-alt"></i> 刷新</button>
+                <button id="uploadBtn"><i class="fas fa-upload"></i> 上传</button>
+                <button id="mkdirBtn"><i class="fas fa-folder-plus"></i> 新建文件夹</button>
+                <input type="file" id="fileUploadInput" style="display:none" />
+                <span id="currentPathDisplay" style="margin-left:12px;">路径: /</span>
+            </div>
+            <ul class="file-list" id="realFileList"></ul>
+        `;
+        const fileListUl = container.querySelector('#realFileList');
+        const pathSpan = container.querySelector('#currentPathDisplay');
+        const refreshBtn = container.querySelector('#refreshBtn');
+        const uploadBtn = container.querySelector('#uploadBtn');
+        const mkdirBtn = container.querySelector('#mkdirBtn');
+        const fileInput = container.querySelector('#fileUploadInput');
+
+        async function loadDir(path) {
+            if (!javaBackendReady || !window.javaBackend) {
+                fileListUl.innerHTML = '<li>等待后端连接...</li>';
+                return;
+            }
+            const result = window.javaBackend.listDirectory(path);
+            let files;
+            try {
+                files = JSON.parse(result);
+                if (files.error) throw new Error(files.error);
+            } catch(e) {
+                fileListUl.innerHTML = `<li>加载失败: ${e.message}</li>`;
+                return;
+            }
+            currentDir = path;
+            pathSpan.innerText = `路径: ${currentDir}`;
+            fileListUl.innerHTML = '';
+            for (let f of files) {
+                const li = document.createElement('li');
+                const nameSpan = document.createElement('div');
+                nameSpan.className = 'file-name';
+                nameSpan.innerHTML = f.isDirectory ? `📁 ${f.name}` : `📄 ${f.name}`;
+                if (f.isDirectory) {
+                    nameSpan.style.cursor = 'pointer';
+                    nameSpan.onclick = () => loadDir(f.fullPath);
+                }
+                const actionsDiv = document.createElement('div');
+                actionsDiv.className = 'file-actions';
+                if (!f.isDirectory) {
+                    const dlBtn = document.createElement('button');
+                    dlBtn.innerHTML = '<i class="fas fa-download"></i>';
+                    dlBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        window.javaBackend.downloadFile(f.fullPath, f.name);
+                    };
+                    actionsDiv.appendChild(dlBtn);
+                }
+                const delBtn = document.createElement('button');
+                delBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                delBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    if (confirm(`确定删除 ${f.name} 吗？`)) {
+                        window.javaBackend.deleteFile(f.fullPath);
+                        setTimeout(() => loadDir(currentDir), 500);
+                    }
+                };
+                actionsDiv.appendChild(delBtn);
+                li.appendChild(nameSpan);
+                li.appendChild(actionsDiv);
+                fileListUl.appendChild(li);
+            }
+        }
+
+        refreshBtn.onclick = () => loadDir(currentDir);
+        uploadBtn.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const base64 = ev.target.result.split(',')[1];
+                window.javaBackend.uploadFile(file.name, base64, currentDir);
+            };
+            reader.readAsDataURL(file);
+            fileInput.value = '';
+        };
+        mkdirBtn.onclick = () => {
+            const name = prompt("请输入新文件夹名称:");
+            if (name && name.trim()) {
+                const newPath = currentDir.endsWith('/') ? currentDir + name : currentDir + '/' + name;
+                window.javaBackend.createDirectory(newPath);
+                setTimeout(() => loadDir(currentDir), 500);
+            }
+        };
+
+        window.onFileOperationComplete = (op) => { if (op === 'delete' || op === 'mkdir') loadDir(currentDir); };
+        window.onUploadComplete = (fileName) => { alert(`上传 ${fileName} 完成`); loadDir(currentDir); };
+        window.onDownloadReady = (remotePath, fileName, b64) => {
+            const a = document.createElement('a');
+            a.href = 'data:application/octet-stream;base64,' + b64;
+            a.download = fileName;
+            a.click();
+        };
+        window.onError = (msg) => alert("错误: " + msg);
+
+        loadDir(currentDir);
+    }
+
+    // ========== 关键修改：点击“终端”图标直接退出桌面，返回原生 SSH 终端 ==========
+    function openTerminal() {
+        if (window.javaBackend && window.javaBackend.exitToTerminal) {
+            window.javaBackend.exitToTerminal();
+        } else {
+            alert("无法返回终端，请检查连接");
+        }
+    }
+
+    // 打开文件管理器（在 WebView 内新建窗口）
+    function openFileManager() {
+        openApp('filemanager', '文件管理器', (container) => {
+            if (javaBackendReady && window.javaBackend) {
+                generateRealFileManagerContent(container);
+            } else {
+                container.innerHTML = '<div style="padding:20px;text-align:center;">等待后端连接...</div>';
+                const checkInterval = setInterval(() => {
+                    if (javaBackendReady && window.javaBackend && activeWindows.has('filemanager')) {
+                        clearInterval(checkInterval);
+                        const win = activeWindows.get('filemanager');
+                        const contentDiv = win.querySelector('.window-content');
+                        if (contentDiv) generateRealFileManagerContent(contentDiv);
+                    }
+                }, 1000);
+            }
+        }, 600, 450);
+    }
+
+    // 后端就绪回调
+    window.onJavaBackendReady = function() {
+        javaBackendReady = true;
+        console.log("Java backend ready");
+        if (activeWindows.has('filemanager')) {
+            const win = activeWindows.get('filemanager');
+            const contentDiv = win.querySelector('.window-content');
+            if (contentDiv && contentDiv.innerHTML.includes('等待后端连接')) {
+                generateRealFileManagerContent(contentDiv);
+            }
+        }
+    };
+
+    // 桌面图标双击事件
+    const desktopIcons = document.querySelectorAll('.desktop-icon');
+    desktopIcons.forEach(icon => {
+        icon.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            const app = icon.getAttribute('data-app');
+            if (app === 'terminal') {
+                openTerminal();
+            } else if (app === 'filemanager') {
+                openFileManager();
+            }
+        });
+    });
+
+    // 开始菜单项点击
+    const startItems = document.querySelectorAll('.start-app-item');
+    startItems.forEach(item => {
+        item.addEventListener('click', (e) => {
+            const app = item.getAttribute('data-app');
+            if (app === 'terminal') {
+                openTerminal();
+            } else if (app === 'filemanager') {
+                openFileManager();
+            } else if (item.id === 'fakePower') {
+                alert("锁定功能暂未实现");
+            }
+            startMenu.classList.add('hidden');
+        });
+    });
+
+    window.addEventListener('resize', () => {
+        for(let [appId, winEl] of activeWindows.entries()) {
+            const rect = winEl.getBoundingClientRect();
+            const maxX = window.innerWidth - winEl.offsetWidth;
+            const maxY = window.innerHeight - winEl.offsetHeight - 10;
+            let newLeft = rect.left;
+            let newTop = rect.top;
+            if (rect.right > window.innerWidth) newLeft = Math.max(20, maxX);
+            if (rect.bottom > window.innerHeight - 10) newTop = Math.max(20, maxY);
+            if (newLeft !== rect.left) winEl.style.left = newLeft + 'px';
+            if (newTop !== rect.top) winEl.style.top = newTop + 'px';
+        }
+    });
+
+    document.querySelector('.desktop').addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        alert("桌面右键菜单（演示）");
+    });
+</script>
+</body>
+</html>

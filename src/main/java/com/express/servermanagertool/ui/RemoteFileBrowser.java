@@ -71,7 +71,7 @@ public class RemoteFileBrowser extends BorderPane {
                 deleteBtn, downloadBtn, uploadBtn, exitBtn);
         setTop(topBar);
 
-        // ================= 左侧目录树（隐藏滚动条） =================
+        // ================= 左侧目录树 =================
         treeView = new TreeView<>();
         TreeItem<String> rootItem = new TreeItem<>("/");
         rootItem.getChildren().add(new TreeItem<>("")); // 占位用于展开
@@ -79,8 +79,7 @@ public class RemoteFileBrowser extends BorderPane {
         treeView.setShowRoot(true);
         treeView.setStyle(
                 "-fx-background-color: #252526; -fx-text-fill: #e0e0e0; " +
-                        "-fx-font-size: 13; -fx-border-color: #444;" +
-                        " .scroll-bar:vertical, .scroll-bar:horizontal { -fx-opacity: 0; -fx-background-color: transparent; }"
+                        "-fx-font-size: 13; -fx-border-color: #444;"
         );
         treeView.setCellFactory(tv -> new TreeCell<>() {
             @Override
@@ -112,11 +111,10 @@ public class RemoteFileBrowser extends BorderPane {
             }
         });
 
-        // ================= 右侧文件表格（隐藏滚动条） =================
+        // ================= 右侧文件表格 =================
         fileTable = new TableView<>();
         fileTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
-        fileTable.setStyle("-fx-background-color: #202020; -fx-text-fill: #e0e0e0; -fx-font-size: 13;" +
-                " .scroll-bar:vertical, .scroll-bar:horizontal { -fx-opacity: 0; -fx-background-color: transparent; }");
+        fileTable.setStyle("-fx-background-color: #202020; -fx-text-fill: #e0e0e0; -fx-font-size: 13;");
 
         TableColumn<FileInfo, String> nameCol = new TableColumn<>("名称");
         nameCol.setCellValueFactory(cd -> new javafx.beans.property.SimpleStringProperty(cd.getValue().getName()));

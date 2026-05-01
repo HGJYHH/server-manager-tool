@@ -27,7 +27,7 @@ public class SshTerminal extends BorderPane {
     private Runnable onDisconnect;
 
     private BorderPane terminalPanel;
-    private RemoteFileBrowser fileBrowser;
+    private BorderPane fileBrowser;          // 改为 BorderPane 类型，兼容 RemoteFileBrowser 和 WebViewFileBrowser
     private boolean isFileBrowserActive = false;
 
     public SshTerminal() {
@@ -37,7 +37,7 @@ public class SshTerminal extends BorderPane {
         outputArea.setStyle("-fx-font-family: 'Courier New', monospace; -fx-font-size: 13px; " +
                 "-fx-control-inner-background: #0c0c10; -fx-text-fill: #cbd5e6; " +
                 "-fx-padding: 10; -fx-background-color: #0c0c10;");
-        // 隐藏滚动条（需延迟执行，等待皮肤加载）
+        // 隐藏滚动条
         Platform.runLater(() -> {
             Node scrollPane = outputArea.lookup(".scroll-pane");
             if (scrollPane instanceof ScrollPane) {
@@ -46,7 +46,6 @@ public class SshTerminal extends BorderPane {
                 sp.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
             }
         });
-
 
         inputField = new TextField();
         inputField.setStyle("-fx-font-family: monospace; -fx-background-color: #0c0c10; " +
@@ -189,10 +188,12 @@ public class SshTerminal extends BorderPane {
         inputField.clear();
     }
 
+    // 修改此处：使用 WebViewFileBrowser 代替 RemoteFileBrowser
     private void showFileBrowser() {
         if (!isConnected || session == null) return;
         if (fileBrowser == null) {
-            fileBrowser = new RemoteFileBrowser(session, this::showTerminal);
+            // 原为：fileBrowser = new RemoteFileBrowser(session, this::showTerminal);
+            fileBrowser = new WebViewFileBrowser(session, this::showTerminal);
         }
         isFileBrowserActive = true;
         setCenter(fileBrowser);
@@ -202,9 +203,13 @@ public class SshTerminal extends BorderPane {
         isFileBrowserActive = false;
         setCenter(terminalPanel);
         inputField.requestFocus();
+        // 可选：释放 WebViewFileBrowser 资源（如果有 dispose 方法）
+        if (fileBrowser instanceof WebViewFileBrowser) {
+            ((WebViewFileBrowser) fileBrowser).dispose();
+        }
+        fileBrowser = null;  // 下次输入 view 会重新创建
     }
 
-    // ========== 修改点：增加 disconnect(boolean) 重载 ==========
     public void disconnect() {
         disconnect(true);
     }
